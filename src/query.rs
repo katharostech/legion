@@ -190,7 +190,7 @@ macro_rules! impl_view_tuple {
             }
 
             fn validate() -> bool {
-                let types = &[$( TypeId::of::<$ty::Component>() ),*];
+                let types = &[$( ComponentTypeId(TypeId::of::<$ty::Component>(), 0) ),*];
                 for i in 0..types.len() {
                     for j in (i + 1)..types.len() {
                         if unsafe { types.get_unchecked(i) == types.get_unchecked(j) } {

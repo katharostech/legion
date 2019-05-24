@@ -224,8 +224,12 @@
 //!     render_instanced(model, &transforms);
 //! }
 //! ```
+#![feature(const_type_id)]
+#![feature(maybe_uninit_extra)]
 
 pub mod borrows;
+#[cfg(feature = "c-api")]
+pub mod c_api;
 pub mod query;
 pub mod storage;
 
@@ -268,6 +272,10 @@ impl ArchetypeId {
         ChunkId(self.0, self.1, id)
     }
 }
+
+/// Unique Component Type ID.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ComponentTypeId(TypeId, u32);
 
 /// Unique Chunk ID.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -713,7 +721,7 @@ impl World {
 
             // insert as many components as we can into the chunk
             let allocated = components.write(chunk, &mut self.allocator);
-            chunk.validate();
+            // chunk.validate();
 
             // record new entity locations
             let start = unsafe { chunk.entities().len() - allocated };
@@ -945,7 +953,7 @@ pub trait TagSet {
     fn configure_chunk(&self, chunk: &mut ChunkBuilder);
 
     /// Gets the type of tags contained in this data set.
-    fn types(&self) -> FnvHashSet<TypeId>;
+    fn types(&self) -> FnvHashSet<ComponentTypeId>;
 }
 
 /// A set of entity data components.
@@ -966,7 +974,7 @@ pub trait EntitySource {
     fn configure_chunk(&self, chunk: &mut ChunkBuilder);
 
     /// Gets the entity data component types contained within this source.
-    fn types(&self) -> FnvHashSet<TypeId>;
+    fn types(&self) -> FnvHashSet<ComponentTypeId>;
 
     /// Determines if the source is empty.
     fn is_empty(&mut self) -> bool;
@@ -991,7 +999,7 @@ impl TagSet for () {
 
     fn configure_chunk(&self, _: &mut ChunkBuilder) {}
 
-    fn types(&self) -> FnvHashSet<TypeId> {
+    fn types(&self) -> FnvHashSet<ComponentTypeId> {
         FnvHashSet::default()
     }
 }
@@ -1019,7 +1027,7 @@ macro_rules! impl_shared_data_set {
         {
             fn is_archetype_match(&self, archetype: &Archetype) -> bool {
                 archetype.tags.len() == $arity &&
-                $( archetype.tags.contains(&TypeId::of::<$ty>()) )&&*
+                $( archetype.tags.contains(&ComponentTypeId(TypeId::of::<$ty>(), 0)) )&&*
             }
 
             fn is_chunk_match(&self, chunk: &Chunk) -> bool {
@@ -1036,8 +1044,8 @@ macro_rules! impl_shared_data_set {
                 $( chunk.register_tag($ty.clone()); )*
             }
 
-            fn types(&self) -> FnvHashSet<TypeId> {
-                [$( TypeId::of::<$ty>() ),*].iter().cloned().collect()
+            fn types(&self) -> FnvHashSet<ComponentTypeId> {
+                [$( ComponentTypeId(TypeId::of::<$ty>(), 0) ),*].iter().cloned().collect()
             }
         }
     }
@@ -1070,14 +1078,14 @@ macro_rules! impl_component_source {
         where I: Iterator<Item=($( $ty, )*)>,
               $( $ty: Component ),*
         {
-            fn types(&self) -> FnvHashSet<TypeId> {
-                [$( TypeId::of::<$ty>() ),*].iter().cloned().collect()
+            fn types(&self) -> FnvHashSet<ComponentTypeId> {
+                [$( ComponentTypeId(TypeId::of::<$ty>(), 0) ),*].iter().cloned().collect()
             }
 
             fn is_archetype_match(&self, archetype: &Archetype) -> bool {
                 archetype.components.len() == $arity &&
                 $(
-                    archetype.components.contains(&TypeId::of::<$ty>())
+                    archetype.components.contains(&ComponentTypeId(TypeId::of::<$ty>(), 0))
                 )&&*
             }
 
@@ -1098,14 +1106,14 @@ macro_rules! impl_component_source {
                 unsafe {
                     let entities = chunk.entities_unchecked();
                     $(
-                        let $ty = chunk.components_mut_unchecked::<$ty>().unwrap();
+                        let $ty = chunk.components_mut_unchecked_uninit::<$ty>().unwrap();
                     )*
 
                     while let Some(($( $id, )*)) = { if chunk.is_full() { None } else { self.source.next() } } {
                         let entity = allocator.create_entity();
                         entities.push(entity);
                         $(
-                            $ty.push($id);
+                            $ty[count].write($id);
                         )*
                         count += 1;
                     }
