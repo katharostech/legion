@@ -3,6 +3,19 @@ use easy_ffi::*;
 use fnv::FnvHashSet;
 use std::os::raw::c_void;
 
+easy_ffi!(bool_ffi =>
+    |err| {
+        println!("{}", err);
+        false
+    }
+    |panic_val| {
+        match panic_val.downcast_ref::<&'static str>() {
+            Some(s) => println!("panic: {}", s),
+            None => println!("unknown panic!"),
+        }
+        false
+    }
+);
 easy_ffi!(ptr_ffi =>
     |err| {
         println!("{}", err);
@@ -193,18 +206,23 @@ impl crate::EntitySource for (&EntityData, &mut EntityResult) {
                 }
                 let entity = allocator.create_entity();
                 entities.push(entity);
+                *result.entities.offset(count as isize) = entity;
                 count += 1;
             }
             for comp_idx in 0..data.num_component_types {
                 let storage = chunk
-                    .components_mut_unchecked_uninit_raw(&ComponentTypeId(
-                        EXT_TYPE_ID,
-                        *data.component_types.offset(comp_idx as isize),
-                    ))
+                    .components_mut_unchecked_uninit_raw(
+                        &ComponentTypeId(
+                            EXT_TYPE_ID,
+                            *data.component_types.offset(comp_idx as isize),
+                        ),
+                        0,
+                    )
                     .expect("component storage did not exist when writing chunk");
                 let comp_size = (*data.component_data_sizes.offset(comp_idx as isize)) as usize;
                 std::ptr::copy_nonoverlapping(
-                    (*data.component_data
+                    (*data
+                        .component_data
                         .offset((src_entity_start * comp_size) as isize))
                         as *mut u8,
                     storage
@@ -272,6 +290,28 @@ void_ffi!(
         }
     }
 );
+bool_ffi!(
+    fn lgn_world_delete(
+        ptr: *mut World,
+        entity: Entity,
+    ) -> Result<bool, &'static str> {
+        unsafe {
+            let world = (ptr as *mut crate::World).as_mut().unwrap();
+            Ok(world.delete(entity))
+        }
+    }
+);
+bool_ffi!(
+    fn lgn_world_entity_is_alive(
+        ptr: *mut World,
+        entity: Entity,
+    ) -> Result<bool, &'static str> {
+        unsafe {
+            let world = (ptr as *mut crate::World).as_mut().unwrap();
+            Ok(world.is_alive(&entity))
+        }
+    }
+);
 ptr_ffi!(
     fn lgn_world_get_component(
         ptr: *mut World,
@@ -281,6 +321,23 @@ ptr_ffi!(
         unsafe {
             let world = (ptr as *mut crate::World).as_mut().unwrap();
             let result = world.component_raw(&ComponentTypeId(EXT_TYPE_ID, ty), entity);
+            if let Some(result) = result {
+                Ok(result.as_ptr() as *mut c_void)
+            } else {
+                Ok(std::ptr::null_mut())
+            }
+        }
+    }
+);
+ptr_ffi!(
+    fn lgn_world_get_tag(
+        ptr: *mut World,
+        ty: u32,
+        entity: Entity,
+    ) -> Result<*mut c_void, &'static str> {
+        unsafe {
+            let world = (ptr as *mut crate::World).as_mut().unwrap();
+            let result = world.tag_raw(&TagTypeId(EXT_TYPE_ID, ty), entity);
             if let Some(result) = result {
                 Ok(result.as_ptr() as *mut c_void)
             } else {
@@ -336,9 +393,13 @@ mod tests {
         (pos_components, rot_components)
     }
 
+    fn shared_data() -> (usize, f32, u16) {
+        (1usize, 2f32, 3u16)
+    }
+
     fn insert_entity(world: *mut World) -> Vec<Entity> {
         use std::mem::size_of;
-        let shared = (1usize, 2f32, 3u16);
+        let shared = shared_data();
         let (pos_components, rot_components) = test_data();
 
         let tag_types: Vec<u32> = vec![
@@ -403,11 +464,65 @@ mod tests {
         let entities = insert_entity(world);
         unsafe {
             let ptr =
-                lgn_world_get_component(world, type_id_as_u32::<Pos>(), entities[0]) as *mut Pos;
+                lgn_world_get_component(world, type_id_as_u32::<Pos>(), entities[1]) as *mut Pos;
             assert_ne!(std::ptr::null_mut(), ptr);
             let component = ptr.as_mut().unwrap();
-            assert_eq!(component, &mut test_data().0[0]);
+            assert_eq!(component, &mut test_data().0[1]);
         }
+        lgn_world_free(world);
+        lgn_universe_free(universe);
+    }
+
+    #[test]
+    fn get_component_wrong_type() {
+        use std::mem::size_of;
+        let universe = lgn_universe_new();
+        let world = lgn_universe_create_world(universe);
+        let entities = insert_entity(world);
+        let ptr = lgn_world_get_component(world, 0, entities[1]) as *mut Pos;
+        assert_eq!(std::ptr::null_mut(), ptr);
+        lgn_world_free(world);
+        lgn_universe_free(universe);
+    }
+
+    #[test]
+    fn get_tag() {
+        use std::mem::size_of;
+        let universe = lgn_universe_new();
+        let world = lgn_universe_create_world(universe);
+        let entities = insert_entity(world);
+        unsafe {
+            let ptr = lgn_world_get_tag(world, type_id_as_u32::<f32>(), entities[1]) as *mut f32;
+            assert_ne!(std::ptr::null_mut(), ptr);
+            let tag = ptr.as_mut().unwrap();
+            assert_eq!(tag, &mut shared_data().1);
+        }
+        lgn_world_free(world);
+        lgn_universe_free(universe);
+    }
+
+    #[test]
+    fn get_tag_wrong_type() {
+        use std::mem::size_of;
+        let universe = lgn_universe_new();
+        let world = lgn_universe_create_world(universe);
+        let entities = insert_entity(world);
+        let ptr = lgn_world_get_tag(world, 0, entities[1]) as *mut f32;
+        assert_eq!(std::ptr::null_mut(), ptr);
+        lgn_world_free(world);
+        lgn_universe_free(universe);
+    }
+
+    #[test]
+    fn delete_entity() {
+        use std::mem::size_of;
+        let universe = lgn_universe_new();
+        let world = lgn_universe_create_world(universe);
+        let entities = insert_entity(world);
+        assert_ne!(std::ptr::null_mut(), lgn_world_get_component(world, type_id_as_u32::<Pos>(), entities[1]));
+        assert_eq!(lgn_world_entity_is_alive(world, entities[1]), true);
+        assert_eq!(lgn_world_delete(world, entities[1]), true);
+        assert_eq!(lgn_world_entity_is_alive(world, entities[1]), false);
         lgn_world_free(world);
         lgn_universe_free(universe);
     }

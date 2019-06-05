@@ -384,8 +384,9 @@ impl Chunk {
     pub unsafe fn components_mut_unchecked_uninit_raw(
         &self,
         ty: &ComponentTypeId,
+        offset: usize,
     ) -> Option<NonNull<u8>> {
-        self.components.get(ty).map(|c| c.data_mut())
+        self.components.get(ty).map(|c| c.element_mut(offset))
     }
 
     /// Gets a slice of component data.
@@ -813,7 +814,7 @@ impl DynamicSingleEntitySource {
             std::ptr::copy_nonoverlapping(
                 component.get_unchecked(0),
                 chunk
-                    .components_mut_unchecked_uninit_raw(&ty)
+                    .components_mut_unchecked_uninit_raw(&ty, 0)
                     .unwrap()
                     .as_ptr()
                     .offset((idx * component.len()) as isize),

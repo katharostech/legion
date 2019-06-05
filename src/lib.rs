@@ -905,15 +905,30 @@ impl World {
                 archetypes
                     .get(archetype_id as usize)
                     .and_then(|archetype| archetype.chunk(chunk_id))
-                    .and_then(|chunk| unsafe { chunk.components_mut_unchecked_uninit_raw(ty) })
-                    .map(|ptr| unsafe {
-                        NonNull::new_unchecked(ptr.as_ptr().offset(component_id as isize))
+                    .and_then(|chunk| {
+                        chunk.components_mut_unchecked_uninit_raw(ty, component_id as usize)
                     })
             },
         )
     }
 
     /// Borrows tag data for the given entity.
+    ///
+    /// Returns `Some(data)` if the entity was found and contains the specified data.
+    /// Otherwise `None` is returned.
+    pub unsafe fn tag_raw(&mut self, ty: &TagTypeId, entity: Entity) -> Option<NonNull<u8>> {
+        let archetypes = &self.archetypes;
+        self.allocator.get_location(&entity.index).and_then(
+            |(archetype_id, chunk_id, _component_id)| {
+                archetypes
+                    .get(archetype_id as usize)
+                    .and_then(|archetype| archetype.chunk(chunk_id))
+                    .and_then(|chunk| chunk.tag_raw(ty))
+            },
+        )
+    }
+
+    /// Gets raw pointer for tag data for the given entity.
     ///
     /// Returns `Some(data)` if the entity was found and contains the specified data.
     /// Otherwise `None` is returned.
