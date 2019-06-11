@@ -243,20 +243,16 @@ impl Chunk {
     ///
     /// This function ignores the number of entities allocated for the chunk and may return
     /// uninitialized data.
-    pub unsafe fn components_mut_unchecked_uninit<T: Component>(
+    pub unsafe fn components_mut_raw<T: Component>(
         &self,
-    ) -> Option<&mut [std::mem::MaybeUninit<T>]> {
+    ) -> Option<*mut T> {
         self.component_data_info_by_type
             .get(&ComponentTypeId(TypeId::of::<T>(), 0))
-            .map(|c| {
-                std::slice::from_raw_parts_mut(
-                    c.data_mut() as *mut std::mem::MaybeUninit<T>,
-                    self.capacity,
-                )
-            })
+            .map(|c| 
+                    c.data_mut() as *mut T)
     }
 
-    pub unsafe fn components_mut_unchecked_uninit_raw(
+    pub unsafe fn components_mut_raw_untyped(
         &self,
         ty: &ComponentTypeId,
     ) -> Option<*mut u8> {
@@ -606,7 +602,7 @@ impl DynamicSingleEntitySource {
 
         let ty = ComponentTypeId(TypeId::of::<T>(), 0);
         let data_initializer = |chunk: &mut Chunk, idx: usize| unsafe {
-            chunk.components_mut_unchecked_uninit().unwrap()[idx].write(component);
+            std::ptr::write(chunk.components_mut_raw::<T>().unwrap().offset(idx as isize), component);
         };
 
         (ty, Box::new(chunk_setup), Box::new(data_initializer))
@@ -629,7 +625,7 @@ impl DynamicSingleEntitySource {
             std::ptr::copy_nonoverlapping(
                 component.get_unchecked(0),
                 chunk
-                    .components_mut_unchecked_uninit_raw(&ty)
+                    .components_mut_raw_untyped(&ty)
                     .unwrap()
                     .offset((idx * component.len()) as isize),
                 component.len(),

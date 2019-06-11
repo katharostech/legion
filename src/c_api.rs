@@ -50,7 +50,10 @@ pub struct ExternalEntitySource {
     component_data: *const *const c_void,
     num_entities_written: u32,
 }
-const EXT_TYPE_ID: std::any::TypeId = std::any::TypeId::of::<ExternalComponent>();
+fn ext_type_id() -> std::any::TypeId {
+    std::any::TypeId::of::<ExternalComponent>()
+}
+
 
 impl crate::EntitySource for ExternalEntitySource {
     fn is_archetype_match(&self, archetype: &crate::storage::Archetype) -> bool {
@@ -60,7 +63,7 @@ impl crate::EntitySource for ExternalEntitySource {
             unsafe {
                 for i in 0..self.num_component_types {
                     if !archetype.has_component_type(&ComponentTypeId(
-                        EXT_TYPE_ID,
+                        ext_type_id(),
                         *self.component_types.offset(i as isize),
                     )) {
                         return false;
@@ -74,8 +77,9 @@ impl crate::EntitySource for ExternalEntitySource {
         unsafe {
             for i in 0..self.num_component_types {
                 chunk.register_component_type(
-                    ComponentTypeId(EXT_TYPE_ID, *self.component_types.offset(i as isize)),
+                    ComponentTypeId(ext_type_id(), *self.component_types.offset(i as isize)),
                     (*self.component_data_sizes.offset(i as isize)) as usize,
+                    None,
                 );
             }
         }
@@ -85,7 +89,7 @@ impl crate::EntitySource for ExternalEntitySource {
         unsafe {
             for i in 0..self.num_component_types {
                 set.insert(ComponentTypeId(
-                    EXT_TYPE_ID,
+                    ext_type_id(),
                     *self.component_types.offset(i as isize),
                 ));
             }
@@ -114,8 +118,8 @@ impl crate::EntitySource for ExternalEntitySource {
                 let dst_entity_idx = chunk.len() - 1;
                 for comp_idx in 0..self.num_component_types {
                     // TODO fix hash table lookup in hot path
-                    let storage = chunk.components_mut_unchecked_uninit_raw(&ComponentTypeId(
-                        EXT_TYPE_ID,
+                    let storage = chunk.components_mut_raw_untyped(&ComponentTypeId(
+                        ext_type_id(),
                         *self.component_types.offset(comp_idx as isize),
                     )).expect("component storage did not exist when writing chunk");
                     let comp_size = (*self.component_data_sizes.offset(comp_idx as isize)) as usize;

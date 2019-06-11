@@ -224,8 +224,7 @@
 //!     render_instanced(model, &transforms);
 //! }
 //! ```
-#![feature(const_type_id)]
-#![feature(maybe_uninit_extra)]
+#![cfg_attr(feature = "c-api", crate_type = "cdylib")]
 
 pub mod borrows;
 #[cfg(feature = "c-api")]
@@ -1137,14 +1136,14 @@ macro_rules! impl_component_source {
                 unsafe {
                     let entities = chunk.entities_unchecked();
                     $(
-                        let $ty = chunk.components_mut_unchecked_uninit::<$ty>().unwrap();
+                        let $ty = chunk.components_mut_raw::<$ty>().unwrap();
                     )*
 
                     while let Some(($( $id, )*)) = { if chunk.is_full() { None } else { self.source.next() } } {
                         let entity = allocator.create_entity();
                         entities.push(entity);
                         $(
-                            $ty[count].write($id);
+                            std::ptr::write($ty.offset(count as isize), $id);
                         )*
                         count += 1;
                     }
