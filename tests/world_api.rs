@@ -1,5 +1,4 @@
 use legion::prelude::*;
-use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Pos(f32, f32, f32);
@@ -303,8 +302,8 @@ fn mutate_add_tag() {
     assert_eq!(3, query_without_static.iter(&world).count());
     assert_eq!(0, query_with_static.iter(&world).count());
 
-    world.mutate_entity(*entities.get(1).unwrap(), |e| {
-        e.set_tag(Arc::new(Static));
+    world.mutate_entity(*entities.get(1).unwrap(), |tags| {
+        tags.set_tag(Static);
     });
 
     assert_eq!(3, query_without_static.iter(&world).count());
@@ -359,8 +358,8 @@ fn mutate_change_tag() {
     assert_eq!(3, query_model_5.iter(&world).count());
     assert_eq!(0, query_model_3.iter(&world).count());
 
-    world.mutate_entity(*entities.get(1).unwrap(), |e| {
-        e.set_tag(Arc::new(Model(3)));
+    world.mutate_entity(*entities.get(1).unwrap(), |tags| {
+        tags.set_tag(Model(3));
     });
 
     assert_eq!(2, query_model_5.iter(&world).count());

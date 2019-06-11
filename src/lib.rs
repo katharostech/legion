@@ -224,7 +224,6 @@
 //!     render_instanced(model, &transforms);
 //! }
 //! ```
-#![cfg_attr(feature = "c-api", crate_type = "cdylib")]
 
 pub mod borrows;
 #[cfg(feature = "c-api")]
@@ -233,7 +232,6 @@ pub mod query;
 pub mod storage;
 
 use crate::borrows::*;
-use crate::storage::TagValue;
 use crate::storage::*;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -245,6 +243,7 @@ use std::any::TypeId;
 use std::fmt::Display;
 use std::iter::Peekable;
 use std::num::Wrapping;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -277,6 +276,10 @@ impl ArchetypeId {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ComponentTypeId(TypeId, u32);
 
+/// Unique Tag Type ID.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct TagTypeId(TypeId, u32);
+
 /// Unique Chunk ID.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ChunkId(u16, u16, u16);
@@ -286,6 +289,7 @@ pub(crate) type EntityVersion = Wrapping<u32>;
 
 /// A handle to an entity.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "c-api", repr(C))]
 pub struct Entity {
     index: EntityIndex,
     version: EntityVersion,
@@ -697,7 +701,7 @@ impl World {
     }
 
     /// Inserts entities from an `EntitySource`.
-    pub fn insert<T, C>(&mut self, tags: T, mut components: C) -> &[Entity]
+    pub fn insert<T, C>(&mut self, mut tags: T, mut components: C) -> &[Entity]
     where
         T: TagSet,
         C: EntitySource,
@@ -718,6 +722,9 @@ impl World {
         while !components.is_empty() {
             // find or create chunk
             let (chunk_index, chunk) = archetype.get_or_create_chunk(&tags, &components);
+
+            // write tags
+            tags.write(chunk);
 
             // insert as many components as we can into the chunk
             let allocated = components.write(chunk, &mut self.allocator);
@@ -846,7 +853,7 @@ impl World {
         }
     }
 
-    /// Borrows entity data for the given entity.
+    /// Borrows component data for the given entity.
     ///
     /// Returns `Some(data)` if the entity was found and contains the specified data.
     /// Otherwise `None` is returned.
@@ -884,7 +891,45 @@ impl World {
         )
     }
 
+    /// Gets a mutable reference to component data for an entity
+    ///
+    /// Returns `Some(data)` if the entity was found and contains the specified data.
+    /// Otherwise `None` is returned.
+    pub unsafe fn component_raw(
+        &mut self,
+        ty: &ComponentTypeId,
+        entity: Entity,
+    ) -> Option<NonNull<u8>> {
+        let archetypes = &self.archetypes;
+        self.allocator.get_location(&entity.index).and_then(
+            |(archetype_id, chunk_id, component_id)| {
+                archetypes
+                    .get(archetype_id as usize)
+                    .and_then(|archetype| archetype.chunk(chunk_id))
+                    .and_then(|chunk| {
+                        chunk.components_mut_raw_untyped(ty, component_id as usize)
+                    })
+            },
+        )
+    }
+
     /// Borrows tag data for the given entity.
+    ///
+    /// Returns `Some(data)` if the entity was found and contains the specified data.
+    /// Otherwise `None` is returned.
+    pub unsafe fn tag_raw(&mut self, ty: &TagTypeId, entity: Entity) -> Option<NonNull<u8>> {
+        let archetypes = &self.archetypes;
+        self.allocator.get_location(&entity.index).and_then(
+            |(archetype_id, chunk_id, _component_id)| {
+                archetypes
+                    .get(archetype_id as usize)
+                    .and_then(|archetype| archetype.chunk(chunk_id))
+                    .and_then(|chunk| chunk.tag_raw(ty))
+            },
+        )
+    }
+
+    /// Gets raw pointer for tag data for the given entity.
     ///
     /// Returns `Some(data)` if the entity was found and contains the specified data.
     /// Otherwise `None` is returned.
@@ -952,7 +997,7 @@ impl<'env> MutEntity<'env> {
         (&mut self.tags, &mut self.components)
     }
 
-    pub fn set_tag<T: Tag>(&mut self, tag: Arc<T>) {
+    pub fn set_tag<T: Tag>(&mut self, tag: T) {
         self.tags.set_tag(tag);
     }
 
@@ -979,11 +1024,14 @@ pub trait TagSet {
     /// contained in the data set.
     fn is_chunk_match(&self, chunk: &Chunk) -> bool;
 
-    /// Configures a new chunk to include the tags in this data set.
+    /// Configures a new chunk to include the tag types in this data set.
     fn configure_chunk(&self, chunk: &mut ChunkBuilder);
 
     /// Gets the type of tags contained in this data set.
-    fn types(&self) -> FnvHashSet<ComponentTypeId>;
+    fn types(&self) -> FnvHashSet<TagTypeId>;
+
+    /// Writes the tags into the given `Chunk`, consuming the data in `self`.
+    fn write<'a>(&mut self, chunk: &'a mut Chunk);
 }
 
 /// A set of entity data components.
@@ -1029,9 +1077,10 @@ impl TagSet for () {
 
     fn configure_chunk(&self, _: &mut ChunkBuilder) {}
 
-    fn types(&self) -> FnvHashSet<ComponentTypeId> {
+    fn types(&self) -> FnvHashSet<TagTypeId> {
         FnvHashSet::default()
     }
+    fn write<'a>(&mut self, _: &'a mut Chunk) {}
 }
 
 pub trait IntoTagSet<T: TagSet> {
@@ -1040,42 +1089,48 @@ pub trait IntoTagSet<T: TagSet> {
 
 macro_rules! impl_shared_data_set {
     ( $arity: expr; $( $ty: ident ),* ) => {
-        impl<$( $ty ),*> IntoTagSet<($( Arc<$ty>, )*)> for ($( $ty, )*)
+        impl<$( $ty ),*> IntoTagSet<($( $ty, )*)> for ($( $ty, )*)
         where $( $ty: Tag ),*
         {
-            fn as_tags(self) -> ($( Arc<$ty>, )*) {
-                #![allow(non_snake_case)]
-                let ($($ty,)*) = self;
-                (
-                    $( Arc::new($ty), )*
-                )
+            fn as_tags(self) -> ($( $ty, )*) {
+                self
             }
         }
 
-        impl<$( $ty ),*> TagSet for ($( Arc<$ty>, )*)
+        impl<$( $ty ),*> TagSet for ($( $ty, )*)
         where $( $ty: Tag ),*
         {
             fn is_archetype_match(&self, archetype: &Archetype) -> bool {
                 archetype.tags.len() == $arity &&
-                $( archetype.tags.contains(&ComponentTypeId(TypeId::of::<$ty>(), 0)) )&&*
+                $( archetype.tags.contains(&TagTypeId(TypeId::of::<$ty>(), 0)) )&&*
             }
 
             fn is_chunk_match(&self, chunk: &Chunk) -> bool {
                 #![allow(non_snake_case)]
                 let ($($ty,)*) = self;
                 $(
-                    (chunk.tag::<$ty>().unwrap() == $ty.as_ref())
+                    (chunk.tag::<$ty>().unwrap() == $ty)
                 )&&*
             }
 
             fn configure_chunk(&self, chunk: &mut ChunkBuilder) {
-                #![allow(non_snake_case)]
-                let ($( ref $ty, )*) = self;
-                $( chunk.register_tag($ty.clone()); )*
+                $(
+                    chunk.register_tag::<$ty>();
+                )*
             }
 
-            fn types(&self) -> FnvHashSet<ComponentTypeId> {
-                [$( ComponentTypeId(TypeId::of::<$ty>(), 0) ),*].iter().cloned().collect()
+            fn types(&self) -> FnvHashSet<TagTypeId> {
+                [$( TagTypeId(TypeId::of::<$ty>(), 0) ),*].iter().cloned().collect()
+            }
+
+            fn write<'a>(&mut self, chunk: &'a mut Chunk) {
+                unsafe {
+                    #![allow(non_snake_case)]
+                    let ($($ty,)*) = self;
+                    $(
+                        std::ptr::write(chunk.tag_init_unchecked(&TagTypeId(TypeId::of::<$ty>(), 0)).unwrap().as_ptr() as *mut $ty, $ty.clone());
+                    )*
+                }
             }
         }
     }
@@ -1143,7 +1198,7 @@ macro_rules! impl_component_source {
                         let entity = allocator.create_entity();
                         entities.push(entity);
                         $(
-                            std::ptr::write($ty.offset(count as isize), $id);
+                            std::ptr::write($ty.as_ptr().offset(count as isize), $id);
                         )*
                         count += 1;
                     }
@@ -1165,21 +1220,11 @@ impl_component_source!(5; A => a, B => b, C => c, D => d, E => e);
 pub trait Component: Send + Sync + Sized + Debug + 'static {}
 
 /// Components that are shared across multiple entities.
-pub trait Tag: Send + Sync + Sized + PartialEq + TagValue + Debug + 'static {}
+pub trait Tag: Send + Sync + Sized + PartialEq + Clone + Debug + 'static {}
 
 impl<T: Send + Sync + Sized + Debug + 'static> Component for T {}
 
-impl<T: Send + Sized + PartialEq + Sync + TagValue + Debug + 'static> Tag for T {}
-
-impl<T: Send + Sized + PartialEq + Sync + Debug + 'static> TagValue for T {
-    fn downcast_equals(&self, other: &TagValue) -> bool {
-        if let Some(other) = other.downcast_ref::<Self>() {
-            other == self
-        } else {
-            false
-        }
-    }
-}
+impl<T: Send + Sized + PartialEq + Clone + Sync + Debug + 'static> Tag for T {}
 
 #[cfg(test)]
 mod tests {
