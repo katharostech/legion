@@ -36,9 +36,9 @@ impl<T: Component> StorageVec<T> {
         }
     }
 
-    fn version(&self) -> usize {
+    /*fn version(&self) -> usize {
         unsafe { (*self.version.get()).0 }
-    }
+    }*/
 
     unsafe fn data(&self) -> &Vec<T> {
         &(*self.data.get())
@@ -373,9 +373,7 @@ impl Chunk {
     ///
     /// This function ignores the number of entities allocated for the chunk and may return
     /// uninitialized data.
-    pub unsafe fn components_mut_raw<T: Component>(
-        &self,
-    ) -> Option<NonNull<T>> {
+    pub unsafe fn components_mut_raw<T: Component>(&self) -> Option<NonNull<T>> {
         self.components
             .get(&ComponentTypeId(TypeId::of::<T>(), 0))
             .map(|c| c.data_mut().cast())
@@ -791,7 +789,14 @@ impl DynamicSingleEntitySource {
 
         let ty = ComponentTypeId(TypeId::of::<T>(), 0);
         let data_initializer = |chunk: &mut Chunk, idx: usize| unsafe {
-            std::ptr::write(chunk.components_mut_raw::<T>().unwrap().as_ptr().offset(idx as isize), component);
+            std::ptr::write(
+                chunk
+                    .components_mut_raw::<T>()
+                    .unwrap()
+                    .as_ptr()
+                    .offset(idx as isize),
+                component,
+            );
         };
 
         (ty, Box::new(chunk_setup), Box::new(data_initializer))

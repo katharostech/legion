@@ -56,22 +56,24 @@ struct ExternalComponent;
 
 #[repr(C)]
 pub struct EntityData {
-    num_tag_types: u32,
-    tag_types: *const u32,
-    tag_data_sizes: *const u32,
-    tag_data: *const *const c_void,
-    num_component_types: u32,
-    component_types: *const u32,
-    component_data_sizes: *const u32,
-    num_entities: u32,
-    component_data: *const *const c_void,
+    pub num_tag_types: u32,
+    pub tag_types: *const u32,
+    pub tag_data_sizes: *const u32,
+    pub tag_data: *const *const c_void,
+    pub num_component_types: u32,
+    pub component_types: *const u32,
+    pub component_data_sizes: *const u32,
+    pub num_entities: u32,
+    pub component_data: *const *const c_void,
 }
+
 #[repr(C)]
 pub struct EntityResult {
-    num_entities_written: u32,
-    entities: *mut Entity,
+    pub num_entities_written: u32,
+    pub entities: *mut Entity,
 }
-fn ext_type_id() -> std::any::TypeId {
+
+pub(crate) fn ext_type_id() -> std::any::TypeId {
     std::any::TypeId::of::<ExternalComponent>()
 }
 
@@ -82,9 +84,10 @@ impl crate::TagSet for &EntityData {
         } else {
             unsafe {
                 for i in 0..self.num_tag_types {
-                    if !archetype
-                        .has_tag_type(&TagTypeId(ext_type_id(), *self.tag_types.offset(i as isize)))
-                    {
+                    if !archetype.has_tag_type(&TagTypeId(
+                        ext_type_id(),
+                        *self.tag_types.offset(i as isize),
+                    )) {
                         return false;
                     }
                 }
@@ -294,10 +297,7 @@ void_ffi!(
     }
 );
 bool_ffi!(
-    fn lgn_world_delete(
-        ptr: *mut World,
-        entity: Entity,
-    ) -> Result<bool, &'static str> {
+    fn lgn_world_delete(ptr: *mut World, entity: Entity) -> Result<bool, &'static str> {
         unsafe {
             let world = (ptr as *mut crate::World).as_mut().unwrap();
             Ok(world.delete(entity))
@@ -305,10 +305,7 @@ bool_ffi!(
     }
 );
 bool_ffi!(
-    fn lgn_world_entity_is_alive(
-        ptr: *mut World,
-        entity: Entity,
-    ) -> Result<bool, &'static str> {
+    fn lgn_world_entity_is_alive(ptr: *mut World, entity: Entity) -> Result<bool, &'static str> {
         unsafe {
             let world = (ptr as *mut crate::World).as_mut().unwrap();
             Ok(world.is_alive(&entity))
@@ -461,7 +458,6 @@ mod tests {
 
     #[test]
     fn get_component() {
-        use std::mem::size_of;
         let universe = lgn_universe_new();
         let world = lgn_universe_create_world(universe);
         let entities = insert_entity(world);
@@ -478,7 +474,6 @@ mod tests {
 
     #[test]
     fn get_component_wrong_type() {
-        use std::mem::size_of;
         let universe = lgn_universe_new();
         let world = lgn_universe_create_world(universe);
         let entities = insert_entity(world);
@@ -490,7 +485,6 @@ mod tests {
 
     #[test]
     fn get_tag() {
-        use std::mem::size_of;
         let universe = lgn_universe_new();
         let world = lgn_universe_create_world(universe);
         let entities = insert_entity(world);
@@ -506,7 +500,6 @@ mod tests {
 
     #[test]
     fn get_tag_wrong_type() {
-        use std::mem::size_of;
         let universe = lgn_universe_new();
         let world = lgn_universe_create_world(universe);
         let entities = insert_entity(world);
@@ -518,14 +511,20 @@ mod tests {
 
     #[test]
     fn delete_entity() {
-        use std::mem::size_of;
         let universe = lgn_universe_new();
         let world = lgn_universe_create_world(universe);
         let entities = insert_entity(world);
-        assert_ne!(std::ptr::null_mut(), lgn_world_get_component(world, type_id_as_u32::<Pos>(), entities[1]));
+        assert_ne!(
+            std::ptr::null_mut(),
+            lgn_world_get_component(world, type_id_as_u32::<Pos>(), entities[1])
+        );
         assert_eq!(lgn_world_entity_is_alive(world, entities[1]), true);
         assert_eq!(lgn_world_delete(world, entities[1]), true);
         assert_eq!(lgn_world_entity_is_alive(world, entities[1]), false);
+        assert_eq!(
+            std::ptr::null_mut(),
+            lgn_world_get_component(world, type_id_as_u32::<Pos>(), entities[1])
+        );
         lgn_world_free(world);
         lgn_universe_free(universe);
     }
