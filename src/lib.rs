@@ -231,6 +231,8 @@ pub mod c_api;
 #[cfg(feature = "c-api")]
 pub mod c_api_query;
 pub mod query;
+#[cfg(feature = "schedule")]
+pub mod schedule;
 pub mod storage;
 
 use crate::borrows::*;
