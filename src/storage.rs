@@ -36,9 +36,9 @@ impl<T: Component> StorageVec<T> {
         }
     }
 
-    fn version(&self) -> usize {
+    /*fn version(&self) -> usize {
         unsafe { (*self.version.get()).0 }
-    }
+    }*/
 
     unsafe fn data(&self) -> &Vec<T> {
         &(*self.data.get())
@@ -373,15 +373,13 @@ impl Chunk {
     ///
     /// This function ignores the number of entities allocated for the chunk and may return
     /// uninitialized data.
-    pub unsafe fn components_mut_unchecked_uninit<T: Component>(
-        &self,
-    ) -> Option<&mut [std::mem::MaybeUninit<T>]> {
+    pub unsafe fn components_mut_raw<T: Component>(&self) -> Option<NonNull<T>> {
         self.components
             .get(&ComponentTypeId(TypeId::of::<T>(), 0))
-            .map(|c| std::slice::from_raw_parts_mut(c.data_mut().cast().as_ptr(), self.capacity))
+            .map(|c| c.data_mut().cast())
     }
 
-    pub unsafe fn components_mut_unchecked_uninit_raw(
+    pub unsafe fn components_mut_raw_untyped(
         &self,
         ty: &ComponentTypeId,
         offset: usize,
@@ -791,7 +789,14 @@ impl DynamicSingleEntitySource {
 
         let ty = ComponentTypeId(TypeId::of::<T>(), 0);
         let data_initializer = |chunk: &mut Chunk, idx: usize| unsafe {
-            chunk.components_mut_unchecked_uninit().unwrap()[idx].write(component);
+            std::ptr::write(
+                chunk
+                    .components_mut_raw::<T>()
+                    .unwrap()
+                    .as_ptr()
+                    .offset(idx as isize),
+                component,
+            );
         };
 
         (ty, Box::new(chunk_setup), Box::new(data_initializer))
@@ -814,7 +819,7 @@ impl DynamicSingleEntitySource {
             std::ptr::copy_nonoverlapping(
                 component.get_unchecked(0),
                 chunk
-                    .components_mut_unchecked_uninit_raw(&ty, 0)
+                    .components_mut_raw_untyped(&ty, 0)
                     .unwrap()
                     .as_ptr()
                     .offset((idx * component.len()) as isize),

@@ -224,12 +224,12 @@
 //!     render_instanced(model, &transforms);
 //! }
 //! ```
-#![feature(const_type_id)]
-#![feature(maybe_uninit_extra)]
 
 pub mod borrows;
 #[cfg(feature = "c-api")]
 pub mod c_api;
+#[cfg(feature = "c-api")]
+pub mod c_api_query;
 pub mod query;
 pub mod storage;
 
@@ -865,6 +865,9 @@ impl World {
     /// This function borrows all components of type `T` in the world. It may panic if
     /// any other code is currently borrowing `T` mutably (such as in a query).
     pub fn component<'a, T: Component>(&'a self, entity: Entity) -> Option<Borrowed<'a, T>> {
+        if !self.allocator.is_alive(&entity) {
+            return None;
+        }
         self.allocator.get_location(&entity.index).and_then(
             |(archetype_id, chunk_id, component_id)| {
                 self.archetypes
@@ -881,6 +884,9 @@ impl World {
     /// Returns `Some(data)` if the entity was found and contains the specified data.
     /// Otherwise `None` is returned.
     pub fn component_mut<T: Component>(&mut self, entity: Entity) -> Option<&mut T> {
+        if !self.allocator.is_alive(&entity) {
+            return None;
+        }
         let archetypes = &self.archetypes;
         self.allocator.get_location(&entity.index).and_then(
             |(archetype_id, chunk_id, component_id)| {
@@ -902,15 +908,16 @@ impl World {
         ty: &ComponentTypeId,
         entity: Entity,
     ) -> Option<NonNull<u8>> {
+        if !self.allocator.is_alive(&entity) {
+            return None;
+        }
         let archetypes = &self.archetypes;
         self.allocator.get_location(&entity.index).and_then(
             |(archetype_id, chunk_id, component_id)| {
                 archetypes
                     .get(archetype_id as usize)
                     .and_then(|archetype| archetype.chunk(chunk_id))
-                    .and_then(|chunk| {
-                        chunk.components_mut_unchecked_uninit_raw(ty, component_id as usize)
-                    })
+                    .and_then(|chunk| chunk.components_mut_raw_untyped(ty, component_id as usize))
             },
         )
     }
@@ -920,6 +927,9 @@ impl World {
     /// Returns `Some(data)` if the entity was found and contains the specified data.
     /// Otherwise `None` is returned.
     pub unsafe fn tag_raw(&mut self, ty: &TagTypeId, entity: Entity) -> Option<NonNull<u8>> {
+        if !self.allocator.is_alive(&entity) {
+            return None;
+        }
         let archetypes = &self.archetypes;
         self.allocator.get_location(&entity.index).and_then(
             |(archetype_id, chunk_id, _component_id)| {
@@ -936,6 +946,9 @@ impl World {
     /// Returns `Some(data)` if the entity was found and contains the specified data.
     /// Otherwise `None` is returned.
     pub fn tag<T: Tag>(&self, entity: Entity) -> Option<&T> {
+        if !self.allocator.is_alive(&entity) {
+            return None;
+        }
         self.allocator
             .get_location(&entity.index)
             .and_then(|(archetype_id, chunk_id, _)| {
@@ -999,7 +1012,7 @@ impl<'env> MutEntity<'env> {
         (&mut self.tags, &mut self.components)
     }
 
-    pub fn set_tag<T: Tag>(&mut self, tag: Arc<T>) {
+    pub fn set_tag<T: Tag>(&mut self, tag: T) {
         self.tags.set_tag(tag);
     }
 
@@ -1193,14 +1206,14 @@ macro_rules! impl_component_source {
                 unsafe {
                     let entities = chunk.entities_unchecked();
                     $(
-                        let $ty = chunk.components_mut_unchecked_uninit::<$ty>().unwrap();
+                        let $ty = chunk.components_mut_raw::<$ty>().unwrap();
                     )*
 
                     while let Some(($( $id, )*)) = { if chunk.is_full() { None } else { self.source.next() } } {
                         let entity = allocator.create_entity();
                         entities.push(entity);
                         $(
-                            $ty[count].write($id);
+                            std::ptr::write($ty.as_ptr().offset(count as isize), $id);
                         )*
                         count += 1;
                     }
