@@ -234,6 +234,7 @@ impl FilterResult for Option<bool> {
         }
     }
 
+    #[inline]
     fn coalesce_or(self, other: Self) -> Self {
         match self {
             Some(x) => other.map(|y| x || y).or(Some(x)),
@@ -250,10 +251,23 @@ impl FilterResult for Option<bool> {
 /// Filters chunks to determine which are to be included in a `Query`.
 pub trait Filter: Send + Sync + Sized + Debug {
     /// Determines if an archetype matches the filter's conditions.
-    fn filter_archetype(&mut self, archetype: &Archetype) -> Option<bool>;
+    fn filter_archetype(&self, _: &Archetype) -> Option<bool> {
+        None
+    }
+
+    /// Determines if a chunk matches immutable elements of the filter's conditions.
+    /// This must always return the same result when given the same chunk.
+    fn filter_chunk_immutable(&self, chunk: &Chunk) -> Option<bool>;
+
+    /// Determines if a chunk matches variable elements of the filter's conditions.
+    /// This may return different results when called repeatedly with the same chunk.
+    fn filter_chunk_variable(&mut self, chunk: &Chunk) -> Option<bool>;
 
     /// Determines if a chunk matches the filter's conditions.
-    fn filter_chunk(&mut self, chunk: &Chunk) -> Option<bool>;
+    fn filter_chunk(&mut self, chunk: &Chunk) -> Option<bool> {
+        self.filter_chunk_immutable(chunk)
+            .coalesce_or(self.filter_chunk_variable(chunk))
+    }
 }
 
 pub mod filter {
@@ -291,12 +305,12 @@ pub struct Passthrough;
 
 impl Filter for Passthrough {
     #[inline]
-    fn filter_archetype(&mut self, _: &Archetype) -> Option<bool> {
+    fn filter_chunk_immutable(&self, _: &Chunk) -> Option<bool> {
         None
     }
 
     #[inline]
-    fn filter_chunk(&mut self, _: &Chunk) -> Option<bool> {
+    fn filter_chunk_variable(&mut self, _: &Chunk) -> Option<bool> {
         None
     }
 }
@@ -304,6 +318,7 @@ impl Filter for Passthrough {
 impl std::ops::Not for Passthrough {
     type Output = Not<Self>;
 
+    #[inline]
     fn not(self) -> Self::Output {
         Not { filter: self }
     }
@@ -312,6 +327,7 @@ impl std::ops::Not for Passthrough {
 impl<Rhs: Filter> std::ops::BitAnd<Rhs> for Passthrough {
     type Output = And<(Self, Rhs)>;
 
+    #[inline]
     fn bitand(self, rhs: Rhs) -> Self::Output {
         And {
             filters: (self, rhs),
@@ -322,6 +338,7 @@ impl<Rhs: Filter> std::ops::BitAnd<Rhs> for Passthrough {
 impl<Rhs: Filter> std::ops::BitOr<Rhs> for Passthrough {
     type Output = Or<(Self, Rhs)>;
 
+    #[inline]
     fn bitor(self, rhs: Rhs) -> Self::Output {
         Or {
             filters: (self, rhs),
@@ -337,19 +354,25 @@ pub struct Not<F> {
 
 impl<F: Filter> Filter for Not<F> {
     #[inline]
-    fn filter_archetype(&mut self, archetype: &Archetype) -> Option<bool> {
+    fn filter_archetype(&self, archetype: &Archetype) -> Option<bool> {
         self.filter.filter_archetype(archetype).map(|x| !x)
     }
 
     #[inline]
-    fn filter_chunk(&mut self, chunk: &Chunk) -> Option<bool> {
-        self.filter.filter_chunk(chunk).map(|x| !x)
+    fn filter_chunk_immutable(&self, chunk: &Chunk) -> Option<bool> {
+        self.filter.filter_chunk_immutable(chunk).map(|x| !x)
+    }
+
+    #[inline]
+    fn filter_chunk_variable(&mut self, chunk: &Chunk) -> Option<bool> {
+        self.filter.filter_chunk_variable(chunk).map(|x| !x)
     }
 }
 
 impl<T: Filter> std::ops::Not for Not<T> {
     type Output = T;
 
+    #[inline]
     fn not(self) -> Self::Output {
         self.filter
     }
@@ -358,6 +381,7 @@ impl<T: Filter> std::ops::Not for Not<T> {
 impl<F: Filter, Rhs: Filter> std::ops::BitAnd<Rhs> for Not<F> {
     type Output = And<(Self, Rhs)>;
 
+    #[inline]
     fn bitand(self, rhs: Rhs) -> Self::Output {
         And {
             filters: (self, rhs),
@@ -368,6 +392,7 @@ impl<F: Filter, Rhs: Filter> std::ops::BitAnd<Rhs> for Not<F> {
 impl<F: Filter, Rhs: Filter> std::ops::BitOr<Rhs> for Not<F> {
     type Output = Or<(Self, Rhs)>;
 
+    #[inline]
     fn bitor(self, rhs: Rhs) -> Self::Output {
         Or {
             filters: (self, rhs),
@@ -385,20 +410,29 @@ macro_rules! impl_and_filter {
     ( $( $ty: ident ),* ) => {
         impl<$( $ty: Filter ),*> Filter for And<($( $ty, )*)> {
             #[inline]
-            fn filter_archetype(&mut self, archetype: &Archetype) -> Option<bool> {
+            fn filter_archetype(&self, archetype: &Archetype) -> Option<bool> {
                 #![allow(non_snake_case)]
-                let ($( $ty, )*) = &mut self.filters;
+                let ($( $ty, )*) = &self.filters;
                 let mut result: Option<bool> = None;
                 $( result = result.coalesce_and($ty.filter_archetype(archetype)); )*
                 result
             }
 
             #[inline]
-            fn filter_chunk(&mut self, chunk: &Chunk) -> Option<bool> {
+            fn filter_chunk_immutable(&self, chunk: &Chunk) -> Option<bool> {
+                #![allow(non_snake_case)]
+                let ($( $ty, )*) = &self.filters;
+                let mut result: Option<bool> = None;
+                $( result = result.coalesce_and($ty.filter_chunk_immutable(chunk)); )*
+                result
+            }
+
+            #[inline]
+            fn filter_chunk_variable(&mut self, chunk: &Chunk) -> Option<bool> {
                 #![allow(non_snake_case)]
                 let ($( $ty, )*) = &mut self.filters;
                 let mut result: Option<bool> = None;
-                $( result = result.coalesce_and($ty.filter_chunk(chunk)); )*
+                $( result = result.coalesce_and($ty.filter_chunk_variable(chunk)); )*
                 result
             }
         }
@@ -406,6 +440,7 @@ macro_rules! impl_and_filter {
         impl<$( $ty: Filter ),*> std::ops::Not for And<($( $ty, )*)> {
             type Output = Not<Self>;
 
+            #[inline]
             fn not(self) -> Self::Output {
                 Not { filter: self }
             }
@@ -414,6 +449,7 @@ macro_rules! impl_and_filter {
         impl<$( $ty: Filter ),*, Rhs: Filter> std::ops::BitAnd<Rhs> for And<($( $ty, )*)> {
             type Output = And<($( $ty, )* Rhs)>;
 
+            #[inline]
             fn bitand(self, rhs: Rhs) -> Self::Output {
                 #![allow(non_snake_case)]
                 let ($( $ty, )*) = self.filters;
@@ -426,6 +462,7 @@ macro_rules! impl_and_filter {
         impl<$( $ty: Filter ),*, Rhs: Filter> std::ops::BitOr<Rhs> for And<($( $ty, )*)> {
             type Output = Or<(Self, Rhs)>;
 
+            #[inline]
             fn bitor(self, rhs: Rhs) -> Self::Output {
                 Or {
                     filters: (self, rhs),
@@ -452,20 +489,29 @@ macro_rules! impl_or_filter {
     ( $( $ty: ident ),* ) => {
         impl<$( $ty: Filter ),*> Filter for Or<($( $ty, )*)> {
             #[inline]
-            fn filter_archetype(&mut self, archetype: &Archetype) -> Option<bool> {
+            fn filter_archetype(&self, archetype: &Archetype) -> Option<bool> {
                 #![allow(non_snake_case)]
-                let ($( $ty, )*) = &mut self.filters;
+                let ($( $ty, )*) = &self.filters;
                 let mut result: Option<bool> = None;
                 $( result = result.coalesce_or($ty.filter_archetype(archetype)); )*
                 result
             }
 
             #[inline]
-            fn filter_chunk(&mut self, chunk: &Chunk) -> Option<bool> {
+            fn filter_chunk_immutable(&self, chunk: &Chunk) -> Option<bool> {
+                #![allow(non_snake_case)]
+                let ($( $ty, )*) = &self.filters;
+                let mut result: Option<bool> = None;
+                $( result = result.coalesce_or($ty.filter_chunk_immutable(chunk)); )*
+                result
+            }
+
+            #[inline]
+            fn filter_chunk_variable(&mut self, chunk: &Chunk) -> Option<bool> {
                 #![allow(non_snake_case)]
                 let ($( $ty, )*) = &mut self.filters;
                 let mut result: Option<bool> = None;
-                $( result = result.coalesce_or($ty.filter_chunk(chunk)); )*
+                $( result = result.coalesce_or($ty.filter_chunk_variable(chunk)); )*
                 result
             }
         }
@@ -473,6 +519,7 @@ macro_rules! impl_or_filter {
         impl<$( $ty: Filter ),*> std::ops::Not for Or<($( $ty, )*)> {
             type Output = Not<Self>;
 
+            #[inline]
             fn not(self) -> Self::Output {
                 Not { filter: self }
             }
@@ -481,6 +528,7 @@ macro_rules! impl_or_filter {
         impl<$( $ty: Filter ),*, Rhs: Filter> std::ops::BitAnd<Rhs> for Or<($( $ty, )*)> {
             type Output = And<(Self, Rhs)>;
 
+            #[inline]
             fn bitand(self, rhs: Rhs) -> Self::Output {
                 And {
                     filters: (self, rhs),
@@ -491,6 +539,7 @@ macro_rules! impl_or_filter {
         impl<$( $ty: Filter ),*, Rhs: Filter> std::ops::BitOr<Rhs> for Or<($( $ty, )*)> {
             type Output = Or<($( $ty, )* Rhs)>;
 
+            #[inline]
             fn bitor(self, rhs: Rhs) -> Self::Output {
                 #![allow(non_snake_case)]
                 let ($( $ty, )*) = self.filters;
@@ -521,12 +570,17 @@ impl<T: Component> ComponentFilter<T> {
 
 impl<T: Component> Filter for ComponentFilter<T> {
     #[inline]
-    fn filter_archetype(&mut self, archetype: &Archetype) -> Option<bool> {
+    fn filter_archetype(&self, archetype: &Archetype) -> Option<bool> {
         Some(archetype.has_component::<T>())
     }
 
     #[inline]
-    fn filter_chunk(&mut self, _: &Chunk) -> Option<bool> {
+    fn filter_chunk_variable(&mut self, _: &Chunk) -> Option<bool> {
+        None
+    }
+
+    #[inline]
+    fn filter_chunk_immutable(&self, _: &Chunk) -> Option<bool> {
         None
     }
 }
@@ -534,6 +588,7 @@ impl<T: Component> Filter for ComponentFilter<T> {
 impl<T: Component> std::ops::Not for ComponentFilter<T> {
     type Output = Not<Self>;
 
+    #[inline]
     fn not(self) -> Self::Output {
         Not { filter: self }
     }
@@ -542,6 +597,7 @@ impl<T: Component> std::ops::Not for ComponentFilter<T> {
 impl<Rhs: Filter, T: Component> std::ops::BitAnd<Rhs> for ComponentFilter<T> {
     type Output = And<(Self, Rhs)>;
 
+    #[inline]
     fn bitand(self, rhs: Rhs) -> Self::Output {
         And {
             filters: (self, rhs),
@@ -552,6 +608,7 @@ impl<Rhs: Filter, T: Component> std::ops::BitAnd<Rhs> for ComponentFilter<T> {
 impl<Rhs: Filter, T: Component> std::ops::BitOr<Rhs> for ComponentFilter<T> {
     type Output = Or<(Self, Rhs)>;
 
+    #[inline]
     fn bitor(self, rhs: Rhs) -> Self::Output {
         Or {
             filters: (self, rhs),
@@ -571,12 +628,17 @@ impl<T: Tag> TagFilter<T> {
 
 impl<T: Tag> Filter for TagFilter<T> {
     #[inline]
-    fn filter_archetype(&mut self, archetype: &Archetype) -> Option<bool> {
+    fn filter_archetype(&self, archetype: &Archetype) -> Option<bool> {
         Some(archetype.has_tag::<T>())
     }
 
     #[inline]
-    fn filter_chunk(&mut self, _: &Chunk) -> Option<bool> {
+    fn filter_chunk_immutable(&self, _: &Chunk) -> Option<bool> {
+        None
+    }
+
+    #[inline]
+    fn filter_chunk_variable(&mut self, _: &Chunk) -> Option<bool> {
         None
     }
 }
@@ -584,6 +646,7 @@ impl<T: Tag> Filter for TagFilter<T> {
 impl<T: Tag> std::ops::Not for TagFilter<T> {
     type Output = Not<Self>;
 
+    #[inline]
     fn not(self) -> Self::Output {
         Not { filter: self }
     }
@@ -592,6 +655,7 @@ impl<T: Tag> std::ops::Not for TagFilter<T> {
 impl<Rhs: Filter, T: Tag> std::ops::BitAnd<Rhs> for TagFilter<T> {
     type Output = And<(Self, Rhs)>;
 
+    #[inline]
     fn bitand(self, rhs: Rhs) -> Self::Output {
         And {
             filters: (self, rhs),
@@ -602,6 +666,7 @@ impl<Rhs: Filter, T: Tag> std::ops::BitAnd<Rhs> for TagFilter<T> {
 impl<Rhs: Filter, T: Tag> std::ops::BitOr<Rhs> for TagFilter<T> {
     type Output = Or<(Self, Rhs)>;
 
+    #[inline]
     fn bitor(self, rhs: Rhs) -> Self::Output {
         Or {
             filters: (self, rhs),
@@ -623,19 +688,25 @@ impl<'a, T: Tag> TagValueFilter<'a, T> {
 
 impl<'a, T: Tag> Filter for TagValueFilter<'a, T> {
     #[inline]
-    fn filter_archetype(&mut self, _: &Archetype) -> Option<bool> {
-        None
+    fn filter_archetype(&self, archetype: &Archetype) -> Option<bool> {
+        Some(archetype.has_tag::<T>())
     }
 
     #[inline]
-    fn filter_chunk(&mut self, chunk: &Chunk) -> Option<bool> {
+    fn filter_chunk_immutable(&self, chunk: &Chunk) -> Option<bool> {
         Some(chunk.tag::<T>().map_or(false, |s| s == self.value))
+    }
+
+    #[inline]
+    fn filter_chunk_variable(&mut self, _: &Chunk) -> Option<bool> {
+        None
     }
 }
 
 impl<'a, T: Tag> std::ops::Not for TagValueFilter<'a, T> {
     type Output = Not<Self>;
 
+    #[inline]
     fn not(self) -> Self::Output {
         Not { filter: self }
     }
@@ -644,6 +715,7 @@ impl<'a, T: Tag> std::ops::Not for TagValueFilter<'a, T> {
 impl<'a, Rhs: Filter, T: Tag> std::ops::BitAnd<Rhs> for TagValueFilter<'a, T> {
     type Output = And<(Self, Rhs)>;
 
+    #[inline]
     fn bitand(self, rhs: Rhs) -> Self::Output {
         And {
             filters: (self, rhs),
@@ -654,6 +726,7 @@ impl<'a, Rhs: Filter, T: Tag> std::ops::BitAnd<Rhs> for TagValueFilter<'a, T> {
 impl<'a, Rhs: Filter, T: Tag> std::ops::BitOr<Rhs> for TagValueFilter<'a, T> {
     type Output = Or<(Self, Rhs)>;
 
+    #[inline]
     fn bitor(self, rhs: Rhs) -> Self::Output {
         Or {
             filters: (self, rhs),
@@ -681,6 +754,7 @@ impl<T: Component> ComponentChangedFilter<T> {
 impl<T: Component> std::ops::Not for ComponentChangedFilter<T> {
     type Output = Not<Self>;
 
+    #[inline]
     fn not(self) -> Self::Output {
         Not { filter: self }
     }
@@ -688,29 +762,26 @@ impl<T: Component> std::ops::Not for ComponentChangedFilter<T> {
 
 impl<T: Component> Filter for ComponentChangedFilter<T> {
     #[inline]
-    fn filter_archetype(&mut self, _: &Archetype) -> Option<bool> {
+    fn filter_archetype(&self, archetype: &Archetype) -> Option<bool> {
+        Some(archetype.has_component::<T>())
+    }
+
+    #[inline]
+    fn filter_chunk_immutable(&self, _: &Chunk) -> Option<bool> {
         None
     }
 
-    fn filter_chunk(&mut self, chunk: &Chunk) -> Option<bool> {
+    fn filter_chunk_variable(&mut self, chunk: &Chunk) -> Option<bool> {
         use std::collections::hash_map::Entry;
         if let Some(version) = chunk.component_version::<T>() {
             match self.versions.entry(chunk.id()) {
-                Entry::Occupied(mut entry) => {
-                    let existing = entry.get_mut();
-                    let changed = *existing != version;
-                    *existing = version;
-                    println!("changed: {}", changed);
-                    Some(changed)
-                }
+                Entry::Occupied(mut entry) => Some(entry.insert(version) != version),
                 Entry::Vacant(entry) => {
                     entry.insert(version);
-                    println!("was vacant");
                     Some(true)
                 }
             }
         } else {
-            println!("no version info");
             Some(false)
         }
     }
@@ -719,6 +790,7 @@ impl<T: Component> Filter for ComponentChangedFilter<T> {
 impl<Rhs: Filter, T: Component> std::ops::BitAnd<Rhs> for ComponentChangedFilter<T> {
     type Output = And<(Self, Rhs)>;
 
+    #[inline]
     fn bitand(self, rhs: Rhs) -> Self::Output {
         And {
             filters: (self, rhs),
@@ -729,6 +801,7 @@ impl<Rhs: Filter, T: Component> std::ops::BitAnd<Rhs> for ComponentChangedFilter
 impl<Rhs: Filter, T: Component> std::ops::BitOr<Rhs> for ComponentChangedFilter<T> {
     type Output = Or<(Self, Rhs)>;
 
+    #[inline]
     fn bitor(self, rhs: Rhs) -> Self::Output {
         Or {
             filters: (self, rhs),
@@ -780,16 +853,24 @@ where
 }
 
 /// An iterator which iterates through all entity data in all chunks.
-pub struct ChunkDataIter<'data, 'query, V: View<'data>, F: Filter> {
-    iter: ChunkViewIter<'data, 'query, V, F>,
+pub struct ChunkDataIter<'data, V, I>
+where
+    V: View<'data>,
+    I: Iterator<Item = ChunkView<'data, V>>,
+{
+    iter: I,
     frontier: Option<V::Iter>,
     view: PhantomData<V>,
 }
 
-impl<'data, 'query, F: Filter, V: View<'data>> Iterator for ChunkDataIter<'data, 'query, V, F> {
+impl<'data, V, I> Iterator for ChunkDataIter<'data, V, I>
+where
+    V: View<'data>,
+    I: Iterator<Item = ChunkView<'data, V>>,
+{
     type Item = <V::Iter as Iterator>::Item;
 
-    #[inline]
+    #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if let Some(ref mut inner) = self.frontier {
@@ -806,13 +887,21 @@ impl<'data, 'query, F: Filter, V: View<'data>> Iterator for ChunkDataIter<'data,
 }
 
 /// An iterator which iterates through all entity data in all chunks, zipped with entity ID.
-pub struct ChunkEntityIter<'data, 'query, V: View<'data>, F: Filter> {
-    iter: ChunkViewIter<'data, 'query, V, F>,
+pub struct ChunkEntityIter<'data, V, I>
+where
+    V: View<'data>,
+    I: Iterator<Item = ChunkView<'data, V>>,
+{
+    iter: I,
     frontier: Option<ZipEntities<'data, V>>,
     view: PhantomData<V>,
 }
 
-impl<'data, 'query, V: View<'data>, F: Filter> Iterator for ChunkEntityIter<'data, 'query, V, F> {
+impl<'data, 'query, V, I> Iterator for ChunkEntityIter<'data, V, I>
+where
+    V: View<'data>,
+    I: Iterator<Item = ChunkView<'data, V>>,
+{
     type Item = (Entity, <V::Iter as Iterator>::Item);
 
     #[inline]
@@ -973,13 +1062,13 @@ pub trait Query {
     fn iter<'a, 'data>(
         &'a mut self,
         world: &'data World,
-    ) -> ChunkDataIter<'data, 'a, Self::View, Self::Filter>;
+    ) -> ChunkDataIter<'data, Self::View, ChunkViewIter<'data, 'a, Self::View, Self::Filter>>;
 
     /// Gets an iterator which iterates through all entity data that matches the query, and also yields the the `Entity` IDs.
     fn iter_entities<'a, 'data>(
         &'a mut self,
         world: &'data World,
-    ) -> ChunkEntityIter<'data, 'a, Self::View, Self::Filter>;
+    ) -> ChunkEntityIter<'data, Self::View, ChunkViewIter<'data, 'a, Self::View, Self::Filter>>;
 
     /// Iterates through all entity data that matches the query.
     fn for_each<'a, 'data, T>(&'a mut self, world: &'data World, mut f: T)
@@ -1031,7 +1120,7 @@ impl<V: for<'a> View<'a>, F: Filter> Query for QueryDef<V, F> {
     fn iter<'a, 'data>(
         &'a mut self,
         world: &'data World,
-    ) -> ChunkDataIter<'data, 'a, Self::View, Self::Filter> {
+    ) -> ChunkDataIter<'data, Self::View, ChunkViewIter<'data, 'a, Self::View, Self::Filter>> {
         ChunkDataIter {
             iter: self.iter_chunks(world),
             frontier: None,
@@ -1042,7 +1131,8 @@ impl<V: for<'a> View<'a>, F: Filter> Query for QueryDef<V, F> {
     fn iter_entities<'a, 'data>(
         &'a mut self,
         world: &'data World,
-    ) -> ChunkEntityIter<'data, 'a, Self::View, Self::Filter> {
+    ) -> ChunkEntityIter<'data, Self::View, ChunkViewIter<'data, 'a, Self::View, Self::Filter>>
+    {
         ChunkEntityIter {
             iter: self.iter_chunks(world),
             frontier: None,
@@ -1111,16 +1201,19 @@ pub struct ChunkView<'a, V: View<'a>> {
 
 impl<'a, V: View<'a>> ChunkView<'a, V> {
     /// Get a slice of all entities contained within the chunk.
+    #[inline]
     pub fn entities(&self) -> &'a [Entity] {
         unsafe { self.chunk.entities() }
     }
 
     /// Get an iterator of all data contained within the chunk.
+    #[inline]
     pub fn iter(&mut self) -> V::Iter {
         V::fetch(self.chunk)
     }
 
     /// Get an iterator of all data and entity IDs contained within the chunk.
+    #[inline]
     pub fn iter_entities(&mut self) -> ZipEntities<'a, V> {
         ZipEntities {
             entities: self.entities(),
