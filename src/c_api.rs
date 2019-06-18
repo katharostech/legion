@@ -226,11 +226,10 @@ impl crate::EntitySource for (&EntityData, &mut EntityResult) {
                     )
                     .expect("component storage did not exist when writing chunk");
                 let comp_size = (*data.component_data_sizes.offset(comp_idx as isize)) as usize;
+                let comp_data_ptr = (*data.component_data.offset(comp_idx as isize)) as *mut u8;
                 std::ptr::copy_nonoverlapping(
-                    (*data
-                        .component_data
-                        .offset((src_entity_start * comp_size) as isize))
-                        as *mut u8,
+                    comp_data_ptr
+                        .offset((src_entity_start * comp_size) as isize),
                     storage
                         .as_ptr()
                         .offset((dst_entity_start * comp_size) as isize),
@@ -462,11 +461,16 @@ mod tests {
         let world = lgn_universe_create_world(universe);
         let entities = insert_entity(world);
         unsafe {
-            let ptr =
-                lgn_world_get_component(world, type_id_as_u32::<Pos>(), entities[1]) as *mut Pos;
-            assert_ne!(std::ptr::null_mut(), ptr);
-            let component = ptr.as_mut().unwrap();
-            assert_eq!(component, &mut test_data().0[1]);
+            let ptr1 = lgn_world_get_component(world, type_id_as_u32::<Pos>(), entities[1]) as *mut Pos;
+            let ptr2 = lgn_world_get_component(world, type_id_as_u32::<Rot>(), entities[1]) as *mut Rot;
+            assert_ne!(std::ptr::null_mut(), ptr1);
+            assert_ne!(std::ptr::null_mut(), ptr2);
+            //assert_ne!(ptr1, ptr2);
+
+            let component1 = ptr1.as_mut().unwrap();
+            let component2 = ptr2.as_mut().unwrap();
+            assert_eq!(component1, &mut test_data().0[1]);
+            assert_eq!(component2, &mut test_data().1[1]);
         }
         lgn_world_free(world);
         lgn_universe_free(universe);
