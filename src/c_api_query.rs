@@ -168,22 +168,6 @@ impl FFIQuery {
             }
         }
 
-        // Validate that all components and tags in accessor exists in filter.
-        for component in &accessor.components {
-            if filter.components.contains(component) == false {
-                return Err(
-                    "Query Accessor attempted to access component without including it in Filter.",
-                );
-            }
-        }
-        for tag in &accessor.tags {
-            if filter.tags.contains(tag) == false {
-                return Err(
-                    "Query Accessor attempted to access tag without including it in Filter.",
-                );
-            }
-        }
-
         let result = Query {
             world: self.world,
             filter: filter,
@@ -229,17 +213,23 @@ impl Iterator for QueryIterator {
 
         for component in &self.query.accessor.components {
             unsafe {
-                let comp_ptr = chunk.components_mut_raw_untyped(&component, 0).unwrap();
+                let comp_ptr = chunk
+                    .components_mut_raw_untyped(&component, 0)
+                    .map(|ptr| ptr.as_ptr())
+                    .unwrap_or(std::ptr::null_mut());
                 self.component_types.push(component.1);
-                self.component_ptrs.push(comp_ptr.as_ptr() as *mut c_void);
+                self.component_ptrs.push(comp_ptr as *mut c_void);
             }
         }
 
         for tag in &self.query.accessor.tags {
             unsafe {
-                let tag_ptr = chunk.tag_raw(&tag).unwrap();
+                let tag_ptr = chunk
+                    .tag_raw(&tag)
+                    .map(|ptr| ptr.as_ptr())
+                    .unwrap_or(std::ptr::null_mut());
                 self.tag_types.push(tag.1);
-                self.tag_ptrs.push(tag_ptr.as_ptr() as *const c_void);
+                self.tag_ptrs.push(tag_ptr as *const c_void);
             }
         }
 
