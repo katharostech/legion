@@ -365,3 +365,64 @@ fn mutate_change_tag() {
     assert_eq!(2, query_model_5.iter(&world).count());
     assert_eq!(1, query_model_3.iter(&world).count());
 }
+
+#[cfg(not(feature = "blanket-impl-comp"))]
+mod custom_type_id {
+    use super::*;
+    impl DefaultComponentImpl for Static {}
+    impl DefaultComponentImpl for Model {}
+    impl DefaultComponentImpl for Accel {}
+    impl DefaultComponentImpl for Vel {}
+    impl DefaultComponentImpl for Scale {}
+    impl DefaultComponentImpl for Pos {}
+    impl DefaultComponentImpl for Rot {}
+
+    #[derive(Debug, Copy, Clone, PartialEq)]
+    struct RustType(u32);
+
+    #[derive(Debug, Copy, Clone, PartialEq)]
+    struct FFIType(u32);
+
+    impl legion::DataTypeId for RustType {
+        fn type_id() -> (std::any::TypeId, u32) {
+            (std::any::TypeId::of::<FFIType>(), 999)
+        }
+    }
+
+    impl legion::DataTypeId for FFIType {
+        fn type_id() -> (std::any::TypeId, u32) {
+            (std::any::TypeId::of::<FFIType>(), 999)
+        }
+    }
+
+    #[test]
+    fn get_component_custom_type_id() {
+        let universe = Universe::new(None);
+        let mut world = universe.create_world();
+
+        let components = vec![
+            (RustType(3), Pos(1.0, 2.0, 3.0)),
+            (RustType(4), Pos(1.0, 3.0, 2.0)),
+        ];
+        let components_ffi = vec![
+            (FFIType(3), Pos(1.0, 2.0, 3.0)),
+            (FFIType(4), Pos(1.0, 3.0, 2.0)),
+        ];
+
+        let mut entities: Vec<Entity> = Vec::new();
+        for e in world.insert_from((), components.clone()) {
+            entities.push(*e);
+        }
+
+        for (i, e) in entities.iter().enumerate() {
+            match world.component(*e) {
+                Some(x) => assert_eq!(components.get(i).map(|(_, x)| x), Some(&x as &Pos)),
+                None => assert_eq!(components.get(i).map(|(x, _)| x), None),
+            }
+            match world.component(*e) {
+                Some(x) => assert_eq!(components_ffi.get(i).map(|(x, _)| x), Some(&x as &FFIType)),
+                None => assert_eq!(components.get(i).map(|(_, x)| x), None),
+            }
+        }
+    }
+}

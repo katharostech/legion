@@ -19,6 +19,17 @@ struct Model(u32);
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 struct Static;
 
+#[cfg(not(feature = "blanket-impl-comp"))]
+mod component_impl {
+    use super::*;
+    impl DefaultComponentImpl for Static {}
+    impl DefaultComponentImpl for Model {}
+    impl DefaultComponentImpl for Accel {}
+    impl DefaultComponentImpl for Vel {}
+    impl DefaultComponentImpl for Scale {}
+    impl DefaultComponentImpl for Pos {}
+    impl DefaultComponentImpl for Rot {}
+}
 // fn create_test_world() -> (
 //     World,
 //     HashMap<

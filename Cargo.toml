@@ -17,10 +17,11 @@ crate_type = ["cdylib", "lib"]
 travis-ci = { repository = "TomGillen/legion", branch = "master" }
 
 [features]
-default = ["par-iter", "c-api", "schedule"]
+default = ["par-iter", "c-api", "schedule", "blanket-impl-comp"]
 par-iter = ["rayon"]
 c-api = ["easy_ffi"]
 schedule = ["petgraph", "hibitset"]
+blanket-impl-comp = []
 
 [dependencies]
 slog = { version = "2.4", features = ["nested-values"] }

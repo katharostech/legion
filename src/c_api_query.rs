@@ -430,6 +430,7 @@ mod tests {
             component_data_sizes: component_data_sizes.as_ptr(),
             component_data: component_data.as_ptr(),
             num_entities: pos_components.len() as u32,
+            entity_ids: std::ptr::null(),
         };
         let mut entity_result_buffer: Vec<Entity> = Vec::with_capacity(pos_components.len());
         let mut result = EntityResult {
@@ -545,9 +546,6 @@ mod tests {
         assert_ne!(std::ptr::null_mut(), iterator);
 
         lgn_query_free(iterator);
-
-        assert_eq!(std::ptr::null(), lgn_queryiterator_move_next(iterator));
-
         lgn_world_free(world);
         lgn_universe_free(universe);
     }

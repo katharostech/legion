@@ -41,7 +41,7 @@ pub trait View<'a>: Sized + Send + Sync + 'static {
 
 #[doc(hidden)]
 pub trait ViewElement {
-    type Component;
+    type Component: DataTypeId;
 }
 
 /// Converts a `View` into a `Query`.
@@ -87,7 +87,7 @@ impl<'a, T: Component> View<'a> for Read<T> {
     }
 
     fn reads<D: Component>() -> bool {
-        TypeId::of::<T>() == TypeId::of::<D>()
+        T::type_id() == D::type_id()
     }
 
     fn writes<D: Component>() -> bool {
@@ -95,7 +95,7 @@ impl<'a, T: Component> View<'a> for Read<T> {
     }
 }
 
-impl<T: Component> ViewElement for Read<T> {
+impl<T: Component + DataTypeId> ViewElement for Read<T> {
     type Component = T;
 }
 
@@ -122,21 +122,24 @@ impl<'a, T: Component> View<'a> for Write<T> {
     }
 
     fn reads<D: Component>() -> bool {
-        TypeId::of::<T>() == TypeId::of::<D>()
+        T::type_id() == D::type_id()
     }
 
     fn writes<D: Component>() -> bool {
-        TypeId::of::<T>() == TypeId::of::<D>()
+        T::type_id() == D::type_id()
     }
 }
 
-impl<T: Component> ViewElement for Write<T> {
+impl<T: Component + DataTypeId> ViewElement for Write<T> {
     type Component = T;
 }
 
 /// Reads a single shared data component type in a `Chunk`.
 #[derive(Debug)]
 pub struct Tagged<T: Tag>(PhantomData<T>);
+
+#[cfg(not(feature = "blanket-impl-comp"))]
+impl<T: Tag> DataTypeId for Tagged<T> {}
 
 impl<T: Tag> DefaultFilter for Tagged<T> {
     type Filter = TagFilter<T>;
@@ -190,7 +193,7 @@ macro_rules! impl_view_tuple {
             }
 
             fn validate() -> bool {
-                let types = &[$( ComponentTypeId(TypeId::of::<$ty::Component>(), 0) ),*];
+                let types = &[$( <$ty as ViewElement>::Component::type_id() ),*];
                 for i in 0..types.len() {
                     for j in (i + 1)..types.len() {
                         if unsafe { types.get_unchecked(i) == types.get_unchecked(j) } {

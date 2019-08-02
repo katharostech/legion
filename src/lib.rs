@@ -253,7 +253,7 @@ use std::sync::Arc;
 
 pub mod prelude {
     pub use crate::query::{filter::*, IntoQuery, Query, Read, Tagged, Write};
-    pub use crate::{Entity, IntoTagSet, Universe, World};
+    pub use crate::{DataTypeId, DefaultComponentImpl, Entity, IntoTagSet, Universe, World};
 }
 
 /// Unique world ID.
@@ -278,11 +278,11 @@ impl ArchetypeId {
 
 /// Unique Component Type ID.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct ComponentTypeId(TypeId, u32);
+pub struct ComponentTypeId(pub TypeId, pub u32);
 
 /// Unique Tag Type ID.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct TagTypeId(TypeId, u32);
+pub struct TagTypeId(pub TypeId, pub u32);
 
 /// Unique Chunk ID.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -298,6 +298,8 @@ pub struct Entity {
     index: EntityIndex,
     version: EntityVersion,
 }
+
+impl DefaultComponentImpl for Entity {}
 
 impl Entity {
     pub(crate) fn new(index: EntityIndex, version: EntityVersion) -> Entity {
@@ -1119,7 +1121,7 @@ macro_rules! impl_shared_data_set {
         {
             fn is_archetype_match(&self, archetype: &Archetype) -> bool {
                 archetype.tags.len() == $arity &&
-                $( archetype.tags.contains(&TagTypeId(TypeId::of::<$ty>(), 0)) )&&*
+                $( archetype.tags.contains(&$ty::type_id()) )&&*
             }
 
             fn is_chunk_match(&self, chunk: &Chunk) -> bool {
@@ -1137,7 +1139,7 @@ macro_rules! impl_shared_data_set {
             }
 
             fn types(&self) -> FnvHashSet<TagTypeId> {
-                [$( TagTypeId(TypeId::of::<$ty>(), 0) ),*].iter().cloned().collect()
+                [$( $ty::type_id() ),*].iter().cloned().collect()
             }
 
             fn write<'a>(&mut self, chunk: &'a mut Chunk) {
@@ -1145,7 +1147,7 @@ macro_rules! impl_shared_data_set {
                     #![allow(non_snake_case)]
                     let ($($ty,)*) = self;
                     $(
-                        std::ptr::write(chunk.tag_init_unchecked(&TagTypeId(TypeId::of::<$ty>(), 0)).unwrap().as_ptr() as *mut $ty, $ty.clone());
+                        std::ptr::write(chunk.tag_init_unchecked(&$ty::type_id()).unwrap().as_ptr() as *mut $ty, $ty.clone());
                     )*
                 }
             }
@@ -1181,13 +1183,13 @@ macro_rules! impl_component_source {
               $( $ty: Component ),*
         {
             fn types(&self) -> FnvHashSet<ComponentTypeId> {
-                [$( ComponentTypeId(TypeId::of::<$ty>(), 0) ),*].iter().cloned().collect()
+                [$( $ty::type_id() ),*].iter().cloned().collect()
             }
 
             fn is_archetype_match(&self, archetype: &Archetype) -> bool {
                 archetype.components.len() == $arity &&
                 $(
-                    archetype.components.contains(&ComponentTypeId(TypeId::of::<$ty>(), 0))
+                    archetype.components.contains(&$ty::type_id())
                 )&&*
             }
 
@@ -1234,14 +1236,60 @@ impl_component_source!(4; A => a, B => b, C => c, D => d);
 impl_component_source!(5; A => a, B => b, C => c, D => d, E => e);
 
 /// Components that are stored once per entity.
-pub trait Component: Send + Sync + Sized + Debug + 'static {}
+pub trait Component: Send + Sync + Sized + Debug + 'static {
+    fn type_id() -> ComponentTypeId;
+}
+
+pub trait DataTypeId {
+    /// Returns a type tuple. By default, it is (TypeId::of::<Self>(), 0).
+    /// This function allows you to override it for interop between Rust and FFI
+    ///
+    /// # Safety
+    ///
+    /// When overriding, it is important that you ensure the type ID is unique!
+    fn type_id() -> (TypeId, u32)
+    where
+        Self: 'static,
+    {
+        (TypeId::of::<Self>(), 0)
+    }
+}
 
 /// Components that are shared across multiple entities.
-pub trait Tag: Send + Sync + Sized + PartialEq + Clone + Debug + 'static {}
+pub trait Tag: Send + Sync + Sized + PartialEq + Clone + Debug + 'static {
+    fn type_id() -> TagTypeId;
+}
+#[cfg(feature = "blanket-impl-comp")]
+impl<T> DataTypeId for T {}
 
-impl<T: Send + Sync + Sized + Debug + 'static> Component for T {}
+impl<T: DataTypeId + Send + Sync + Sized + Debug + 'static> Component for T {
+    fn type_id() -> ComponentTypeId {
+        let (a, b) = <T as DataTypeId>::type_id();
+        ComponentTypeId(a, b)
+    }
+}
 
-impl<T: Send + Sized + PartialEq + Clone + Sync + Debug + 'static> Tag for T {}
+impl<T: DataTypeId + Send + Sync + Sized + PartialEq + Clone + Debug + 'static> Tag for T {
+    fn type_id() -> TagTypeId {
+        let (a, b) = <T as DataTypeId>::type_id();
+        TagTypeId(a, b)
+    }
+}
+
+pub trait DefaultComponentImpl: DataTypeId {}
+#[cfg(not(feature = "blanket-impl-comp"))]
+impl<T: DefaultComponentImpl> DataTypeId for T {}
+
+impl DefaultComponentImpl for usize {}
+impl DefaultComponentImpl for i8 {}
+impl DefaultComponentImpl for u8 {}
+impl DefaultComponentImpl for u16 {}
+impl DefaultComponentImpl for i16 {}
+impl DefaultComponentImpl for i32 {}
+impl DefaultComponentImpl for u32 {}
+impl DefaultComponentImpl for u64 {}
+impl DefaultComponentImpl for f64 {}
+impl DefaultComponentImpl for f32 {}
 
 #[cfg(test)]
 mod tests {

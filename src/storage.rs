@@ -344,7 +344,7 @@ impl Chunk {
     /// this component type in the chunk before calling this function.
     pub unsafe fn components_unchecked<T: Component>(&self) -> Option<&[T]> {
         self.components
-            .get(&ComponentTypeId(TypeId::of::<T>(), 0))
+            .get(&T::type_id())
             .map(|c| std::slice::from_raw_parts(c.data().as_ptr() as *const T, self.len()))
     }
 
@@ -358,7 +358,7 @@ impl Chunk {
     /// this component type in the chunk before calling this function.
     pub unsafe fn components_mut_unchecked<T: Component>(&self) -> Option<&mut [T]> {
         self.components
-            .get(&ComponentTypeId(TypeId::of::<T>(), 0))
+            .get(&T::type_id())
             .map(|c| std::slice::from_raw_parts_mut(c.data_mut().cast().as_ptr(), self.len()))
     }
 
@@ -375,7 +375,7 @@ impl Chunk {
     /// uninitialized data.
     pub unsafe fn components_mut_raw<T: Component>(&self) -> Option<NonNull<T>> {
         self.components
-            .get(&ComponentTypeId(TypeId::of::<T>(), 0))
+            .get(&T::type_id())
             .map(|c| c.data_mut().cast())
     }
 
@@ -424,9 +424,7 @@ impl Chunk {
     }
 
     unsafe fn component_storage_header<T: Component>(&self) -> Option<&mut ComponentStorageHeader> {
-        self.components
-            .get(&ComponentTypeId(TypeId::of::<T>(), 0))
-            .map(|c| c.header())
+        self.components.get(&T::type_id()).map(|c| c.header())
     }
 
     /// Gets the version number of a given component type.
@@ -443,7 +441,7 @@ impl Chunk {
     pub fn tag<T: Tag>(&self) -> Option<&T> {
         unsafe {
             self.tags
-                .get(&TagTypeId(TypeId::of::<T>(), 0))
+                .get(&T::type_id())
                 .map(|s| (s.data().as_ptr() as *const T).as_ref().unwrap())
         }
     }
@@ -546,7 +544,7 @@ impl Chunk {
     }
 
     fn borrow<'a, T: Component>(&'a self) -> Borrow<'a> {
-        let id = ComponentTypeId(TypeId::of::<T>(), 0);
+        let id = T::type_id();
         let state = self
             .borrows
             .get(&id)
@@ -555,7 +553,7 @@ impl Chunk {
     }
 
     fn borrow_mut<'a, T: Component>(&'a self) -> Borrow<'a> {
-        let id = ComponentTypeId(TypeId::of::<T>(), 0);
+        let id = T::type_id();
         let state = self
             .borrows
             .get(&id)
@@ -591,7 +589,7 @@ impl ChunkBuilder {
     /// Registers an entity data component type.
     pub fn register_component<T: Component>(&mut self) {
         self.register_component_raw(
-            ComponentTypeId(TypeId::of::<T>(), 0),
+            T::type_id(),
             size_of::<T>(),
             // None,
             Some(|ptr| unsafe { std::ptr::drop_in_place::<T>(ptr as *mut T) }),
@@ -609,7 +607,7 @@ impl ChunkBuilder {
     /// Registers a tag type.
     pub fn register_tag<T: Tag>(&mut self) {
         self.tags.push((
-            TagTypeId(TypeId::of::<T>(), 0),
+            T::type_id(),
             std::mem::size_of::<T>(),
             TagStorageVTable::from::<T>(),
         ));
@@ -711,13 +709,12 @@ pub struct DynamicTagSet {
 impl DynamicTagSet {
     pub fn set_tag<T: Tag>(&mut self, tag: T) {
         unsafe {
-            self.tags
-                .insert(TagTypeId(TypeId::of::<T>(), 0), OwnedTag::from_value(&tag));
+            self.tags.insert(T::type_id(), OwnedTag::from_value(&tag));
         }
     }
 
     pub fn remove_tag<T: Tag>(&mut self) -> bool {
-        self.tags.remove(&TagTypeId(TypeId::of::<T>(), 0)).is_some()
+        self.tags.remove(&T::type_id()).is_some()
     }
 }
 
@@ -787,7 +784,7 @@ impl DynamicSingleEntitySource {
     ) {
         let chunk_setup = |chunk: &mut ChunkBuilder| chunk.register_component::<T>();
 
-        let ty = ComponentTypeId(TypeId::of::<T>(), 0);
+        let ty = T::type_id();
         let data_initializer = |chunk: &mut Chunk, idx: usize| unsafe {
             std::ptr::write(
                 chunk
@@ -836,7 +833,7 @@ impl DynamicSingleEntitySource {
     }
 
     pub fn remove_component<T: Component>(&mut self) -> bool {
-        let type_id = ComponentTypeId(TypeId::of::<T>(), 0);
+        let type_id = T::type_id();
         if let Some(i) = self
             .components
             .iter()
@@ -948,7 +945,7 @@ impl Archetype {
 
     /// Determines if the archetype's chunks contain the given entity data component type.
     pub fn has_component<T: Component>(&self) -> bool {
-        self.has_component_type(&ComponentTypeId(TypeId::of::<T>(), 0))
+        self.has_component_type(&T::type_id())
     }
 
     /// Determines if the archetype's chunks contain the given entity data component type id.
@@ -958,7 +955,7 @@ impl Archetype {
 
     /// Determines if the archetype's chunks contain the given tag type.
     pub fn has_tag<T: Tag>(&self) -> bool {
-        self.tags.contains(&TagTypeId(TypeId::of::<T>(), 0))
+        self.tags.contains(&T::type_id())
     }
 
     /// Determines if the archetype's chunks contain the given tag type.

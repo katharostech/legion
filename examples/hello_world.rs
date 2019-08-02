@@ -4,6 +4,12 @@ use legion::prelude::*;
 struct Pos(f32, f32, f32);
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Vel(f32, f32, f32);
+#[cfg(not(feature = "blanked-impl-comp"))]
+mod comp_impl {
+    use super::*;
+    impl DefaultComponentImpl for Pos {}
+    impl DefaultComponentImpl for Vel {}
+}
 
 fn main() {
     // create world

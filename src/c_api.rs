@@ -65,6 +65,10 @@ pub struct EntityData {
     pub component_data_sizes: *const u32,
     pub num_entities: u32,
     pub component_data: *const *const c_void,
+    /// Optionally specify pre-allocated entityIDs.
+    /// Pass null if entity IDs should be allocated when inserting data.
+    /// Length must be equal to num_entities.
+    pub entity_ids: *const Entity,
 }
 
 #[repr(C)]
@@ -73,7 +77,7 @@ pub struct EntityResult {
     pub entities: *mut Entity,
 }
 
-pub(crate) fn ext_type_id() -> std::any::TypeId {
+pub fn ext_type_id() -> std::any::TypeId {
     std::any::TypeId::of::<ExternalComponent>()
 }
 
@@ -206,11 +210,15 @@ impl crate::EntitySource for (&EntityData, &mut EntityResult) {
             let src_entity_start = result.num_entities_written as usize;
             let dst_entity_start = chunk.len();
             let start = result.num_entities_written as usize;
-            for _i in start..data.num_entities as usize {
+            for i in start..data.num_entities as usize {
                 if chunk.is_full() {
                     break;
                 }
-                let entity = allocator.create_entity();
+                let entity = if data.entity_ids == std::ptr::null() {
+                    allocator.create_entity()
+                } else {
+                    *data.entity_ids.offset(i as isize)
+                };
                 entities.push(entity);
                 *result.entities.offset(count as isize) = entity;
                 count += 1;
@@ -228,8 +236,7 @@ impl crate::EntitySource for (&EntityData, &mut EntityResult) {
                 let comp_size = (*data.component_data_sizes.offset(comp_idx as isize)) as usize;
                 let comp_data_ptr = (*data.component_data.offset(comp_idx as isize)) as *mut u8;
                 std::ptr::copy_nonoverlapping(
-                    comp_data_ptr
-                        .offset((src_entity_start * comp_size) as isize),
+                    comp_data_ptr.offset((src_entity_start * comp_size) as isize),
                     storage
                         .as_ptr()
                         .offset((dst_entity_start * comp_size) as isize),
@@ -345,6 +352,21 @@ ptr_ffi!(
         }
     }
 );
+void_ffi!(
+    fn lgn_world_allocate_entities(
+        ptr: *mut World,
+        num_entities: u32,
+        entity_buf: *mut Entity,
+    ) -> Result<(), &'static str> {
+        unsafe {
+            let world = (ptr as *mut crate::World).as_mut().unwrap();
+            for i in 0..num_entities {
+                *entity_buf.offset(i as isize) = world.allocator.create_entity();
+            }
+            Ok(())
+        }
+    }
+);
 
 #[cfg(test)]
 mod tests {
@@ -432,6 +454,7 @@ mod tests {
             component_data_sizes: component_data_sizes.as_ptr(),
             component_data: component_data.as_ptr(),
             num_entities: pos_components.len() as u32,
+            entity_ids: std::ptr::null(),
         };
         let mut entity_result_buffer: Vec<Entity> = Vec::with_capacity(pos_components.len());
         let mut result = EntityResult {
@@ -461,8 +484,10 @@ mod tests {
         let world = lgn_universe_create_world(universe);
         let entities = insert_entity(world);
         unsafe {
-            let ptr1 = lgn_world_get_component(world, type_id_as_u32::<Pos>(), entities[1]) as *mut Pos;
-            let ptr2 = lgn_world_get_component(world, type_id_as_u32::<Rot>(), entities[1]) as *mut Rot;
+            let ptr1 =
+                lgn_world_get_component(world, type_id_as_u32::<Pos>(), entities[1]) as *mut Pos;
+            let ptr2 =
+                lgn_world_get_component(world, type_id_as_u32::<Rot>(), entities[1]) as *mut Rot;
             assert_ne!(std::ptr::null_mut(), ptr1);
             assert_ne!(std::ptr::null_mut(), ptr2);
             //assert_ne!(ptr1, ptr2);
