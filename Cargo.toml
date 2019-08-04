@@ -24,7 +24,7 @@ schedule = ["petgraph", "hibitset"]
 blanket-impl-comp = []
 
 [dependencies]
-slog = { version = "2.4", features = ["nested-values"] }
+slog = { version = "2.4", features = ["max_level_trace", "release_max_level_info", "nested-values"] }
 slog-stdlog = "3"
 parking_lot = "0.7"
 downcast-rs = "1.0"
